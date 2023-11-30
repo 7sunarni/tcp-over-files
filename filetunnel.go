@@ -28,11 +28,10 @@ func (t *FileTunnel) Tunnel() {
 		for {
 			_, err := io.Copy(t, t.conn)
 			if err != nil {
-				log.Printf("end write %s:%s to %s failed: %s", t.conn.LocalAddr(), t.conn.RemoteAddr(), t.Output.Name(), err.Error())
+				log.Printf("FileTunnel copy %s:%s to %s failed: %s", t.conn.LocalAddr(), t.conn.RemoteAddr(), t.Output.Name(), err.Error())
 				break
 			}
 		}
-		log.Printf("end write %s:%s to %s", t.conn.LocalAddr(), t.conn.RemoteAddr(), t.Output.Name())
 		closeC <- nil
 	}()
 
@@ -40,11 +39,10 @@ func (t *FileTunnel) Tunnel() {
 		for {
 			_, err := io.Copy(t.conn, t)
 			if err != nil {
-				log.Printf("copy %s to %s:%s failed: %s", t.Input.Name(), t.conn.LocalAddr(), t.conn.RemoteAddr(), err.Error())
+				log.Printf("FileTunnel copy %s to %s:%s failed: %s", t.Input.Name(), t.conn.LocalAddr(), t.conn.RemoteAddr(), err.Error())
 				break
 			}
 		}
-		log.Printf("end write %s to %s:%s", t.Input.Name(), t.conn.LocalAddr(), t.conn.RemoteAddr())
 		closeC <- nil
 	}()
 	<-closeC
@@ -53,54 +51,53 @@ func (t *FileTunnel) Tunnel() {
 
 func (t *FileTunnel) Close() {
 	if err := t.conn.Close(); err != nil {
-		log.Printf("%s close failed %s", t.conn.LocalAddr(), err)
+		log.Printf("FileTunnel %s close failed %s", t.conn.LocalAddr(), err)
 	}
 	if err := t.Input.Close(); err != nil {
-		log.Printf("%s close failed %s", t.Input.Name(), err)
+		log.Printf("FileTunnel %s close failed %s", t.Input.Name(), err)
 	}
 	if err := t.Output.Close(); err != nil {
-		log.Printf("%s close failed %s", t.Output.Name(), err)
+		log.Printf("FileTunnel %s close failed %s", t.Output.Name(), err)
 	}
 	if err := os.Truncate(t.Input.Name(), 0); err != nil {
-		log.Printf("%s truncate failed %s", t.Output.Name(), err)
+		log.Printf("FileTunnel %s truncate failed %s", t.Output.Name(), err)
 	}
 }
 
-func (t *FileTunnel) canWrite() bool {
+func (t *FileTunnel) checkFileSize() bool {
 	t.writeL.Lock()
 	defer t.writeL.Unlock()
 	stat, err := os.Stat(*output)
 	if err != nil {
-		log.Printf("canWrite stat %s failed %s", *output, err)
+		log.Printf("FileTunnel check file size stat %s failed %s", *output, err)
 		panic(err)
 	}
 	if stat.Size() < MaxFileSize {
 		return true
 	}
 	if err := t.Output.Close(); err != nil {
-		log.Printf("canWrite %s close failed %s", t.Output.Name(), err)
+		log.Printf("FileTunnel check file %s close failed %s", t.Output.Name(), err)
 		panic(err)
 	}
-	log.Printf("canWrite wait %s empty", t.Output.Name())
-	return t.outputReady()
+	log.Printf("FileTunnel file %s closed, waiting for empty", t.Output.Name())
+	return t.waitFileEmpty()
 }
 
 func (t *FileTunnel) Write(p []byte) (int, error) {
-	if !t.canWrite() {
+	if !t.checkFileSize() {
 		return 0, errors.New("no space left")
 	}
 	n, err := t.Output.Write(p)
 	if err != nil {
-		log.Printf("write %s failed %s", t.Output.Name(), err)
+		log.Printf("FileTunnel write %s failed %s", t.Output.Name(), err)
 	}
 	return n, err
 }
 
-func (t *FileTunnel) clearRead() {
-
+func (t *FileTunnel) emptyFile() {
 	stat, err := os.Stat(*input)
 	if err != nil {
-		log.Printf("clearRead stat %s failed %s", *input, err)
+		log.Printf("FileTunnel empty file get %s stat failed %s", *input, err)
 		panic(err)
 	}
 	if stat.Size() < MaxFileSize {
@@ -108,32 +105,32 @@ func (t *FileTunnel) clearRead() {
 	}
 
 	if err := t.Input.Close(); err != nil {
-		log.Printf("clearRead close %s failed %s", t.Input.Name(), err)
+		log.Printf("FileTunnel empty file close %s failed %s", t.Input.Name(), err)
 		panic(err)
 	}
 
 	if err := os.Truncate(*input, 0); err != nil {
-		log.Printf("clearRead truncate %s failed %s", t.Input.Name(), err)
+		log.Printf("FileTunnel empty file truncate %s failed %s", t.Input.Name(), err)
 		panic(err)
 	}
 	i, err := os.OpenFile(*input, os.O_RDONLY, 0644)
 	if err != nil {
-		log.Printf("clearRead open file %s failed %s", *input, err)
+		log.Printf("FileTunnel empty file reopen file %s failed %s", *input, err)
 		panic(err)
 	}
-	log.Printf("%s ready clear", t.Input.Name())
+	log.Printf("FileTunnel already empty file %s", t.Input.Name())
 	t.Input = i
 }
 
 func (t *FileTunnel) Read(p []byte) (int, error) {
-	if !t.readyRead() {
-		return 0, errors.New("no data writed")
+	if !t.waitFileReady() {
+		panic("FileTunnel input not ready")
 	}
 	t.readL.Lock()
 	defer t.readL.Unlock()
 	n, err := t.Input.Read(p)
 	if err != nil && strings.Contains(err.Error(), "EOF") {
-		t.clearRead()
+		t.emptyFile()
 	}
 	return n, err
 }
@@ -141,14 +138,14 @@ func (t *FileTunnel) Read(p []byte) (int, error) {
 func NewFileTunnel() *FileTunnel {
 	i, err := os.OpenFile(*input, os.O_RDONLY, 0644)
 	if err != nil {
-		log.Printf("open file %s failed %s", *input, err)
-		return nil
+		log.Printf("FileTunnel open file %s as input failed %s", *input, err)
+		panic(err)
 	}
 
 	o, err := os.OpenFile(*output, os.O_WRONLY, 0644)
 	if err != nil {
-		log.Printf("open file %s failed %s", *output, err)
-		return nil
+		log.Printf("FileTunnel open file %s as output failed %s", *output, err)
+		panic(err)
 	}
 
 	return &FileTunnel{
@@ -160,7 +157,7 @@ func NewFileTunnel() *FileTunnel {
 	}
 }
 
-func (t *FileTunnel) readyRead() bool {
+func (t *FileTunnel) waitFileReady() bool {
 	if t.ready {
 		return true
 	}
@@ -170,25 +167,27 @@ func (t *FileTunnel) readyRead() bool {
 		// Windows watch Linux file will generate error?
 		info, err := os.Stat(t.Input.Name())
 		if err != nil {
-			log.Printf("state %s failed %s", t.Input.Name(), err.Error())
+			log.Printf("FileTunnel waiting file ready, get state %s failed %s", t.Input.Name(), err.Error())
 			continue
 		}
-		if info.Size() > 0 {
-			log.Println("stat size > 0")
-			t.ready = true
-			return true
+		if info.Size() <= 0 {
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
-		time.Sleep(100 * time.Millisecond)
+		log.Printf("FileTunnel waiting file %s has data, starting use it as input", t.Input.Name())
+		t.ready = true
+		break
 	}
+	return true
 }
 
-func (t *FileTunnel) outputReady() bool {
+func (t *FileTunnel) waitFileEmpty() bool {
 	for {
 		// can not use fsnotify.fsnotify
 		// Windows watch Linux file will generate error?
 		info, err := os.Stat(*output)
 		if err != nil {
-			log.Printf("outputReady state %s failed %s", *output, err.Error())
+			log.Printf("FileTunnel waiting file empty, get state %s failed %s", *output, err.Error())
 			continue
 		}
 		if info.Size() != 0 {
@@ -196,10 +195,10 @@ func (t *FileTunnel) outputReady() bool {
 			// time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		log.Printf("outputReady %s stat size = 0", t.Output.Name())
+		log.Printf("FileTunnel file %s empty, starting reuse it as new output", *output)
 		o, err := os.OpenFile(*output, os.O_WRONLY, 0644)
 		if err != nil {
-			log.Printf("outputReady open file %s failed %s", *output, err)
+			log.Printf("FileTunnel file %s failed %s", *output, err)
 			panic(err)
 		}
 		t.Output = o

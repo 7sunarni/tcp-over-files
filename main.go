@@ -9,10 +9,16 @@ import (
 
 func main() {
 	parseFlag()
+	f, err := os.OpenFile(*side+".log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("init log error opening file: %v", err)
+	}
+	defer f.Close()
+	log.SetOutput(f)
+
 	if *side == "server" {
-		for {
-			Server()
-		}
+
+		Server()
 	}
 	if *side == "client" {
 		Client()
@@ -36,26 +42,26 @@ func parseFlag() {
 	flag.Parse()
 
 	if *side == "" || *side != "server" && *side != "client" {
-		log.Println("type must be server or client")
+		log.Println("Prefilght check failed: type must be server or client")
 		os.Exit(1)
 	}
 	if *input == "" {
-		log.Println("missing input file")
+		log.Println("Prefilght check failed: missing input file")
 		os.Exit(1)
 	}
 
 	if *output == "" {
-		log.Println("missing output file")
+		log.Println("Prefilght check failed: missing output file")
 		os.Exit(1)
 	}
 
 	if *side == "client" && *clientPort == "" {
-		log.Println("missing client port")
+		log.Println("Prefilght check failed: missing client port")
 		os.Exit(1)
 	}
 
 	if *side == "server" && *serverForward == "" {
-		log.Println("missing server forward")
+		log.Println("Prefilght check failed: missing server forward")
 		os.Exit(1)
 	}
 }
@@ -63,20 +69,16 @@ func parseFlag() {
 func Client() error {
 	listener, err := net.Listen("tcp", ":"+*clientPort)
 	if err != nil {
-		log.Println("listen failed ", err)
+		log.Printf("Client try listen %s failed: %s", *clientPort, err)
 		return err
 	}
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Println("accept failed ", err)
+			log.Printf("Client accept connection failed %s", err)
 			return err
 		}
 		fileTunnel := NewFileTunnel()
-		if fileTunnel == nil {
-			log.Println("file tunnel empty")
-			return err
-		}
 		fileTunnel.conn = &WrapConn{
 			Real: conn,
 		}
@@ -85,21 +87,17 @@ func Client() error {
 }
 
 func Server() error {
-	fileTunnel := NewFileTunnel()
-	if fileTunnel == nil {
-		log.Println("file tunnel empty")
-		return nil
-	}
+	for {
+		fileTunnel := NewFileTunnel()
+		conn, err := net.Dial("tcp", ":"+*serverForward)
+		if err != nil {
+			log.Printf("listen failed %s", err)
+			return err
+		}
 
-	conn, err := net.Dial("tcp", ":"+*serverForward)
-	if err != nil {
-		log.Printf("listen failed %s", err)
-		return err
+		fileTunnel.conn = &WrapConn{
+			Real: conn,
+		}
+		fileTunnel.Tunnel()
 	}
-
-	fileTunnel.conn = &WrapConn{
-		Real: conn,
-	}
-	fileTunnel.Tunnel()
-	return nil
 }

@@ -16,16 +16,16 @@ func (c *WrapConn) Read(b []byte) (n int, err error) {
 	n, err = c.Real.Read(b)
 	if err != nil {
 		if strings.Contains(err.Error(), "EOF") {
-			return n, errors.New("disconnected")
+			return n, errors.New("CONNECTION CLOSED")
 		}
-		log.Printf("conn read failed %s", err.Error())
+		log.Printf("tcp connection read failed %s", err.Error())
 	}
 	return n, err
 }
 func (c *WrapConn) Write(b []byte) (n int, err error) {
 	n, err = c.Real.Write(b)
 	if err != nil {
-		log.Printf("conn write failed %s", err.Error())
+		log.Printf("tcp connection write failed %s", err.Error())
 	}
 	return n, err
 }
