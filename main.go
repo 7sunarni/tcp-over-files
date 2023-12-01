@@ -17,7 +17,6 @@ func main() {
 	log.SetOutput(f)
 
 	if *side == "server" {
-
 		Server()
 	}
 	if *side == "client" {
@@ -89,6 +88,7 @@ func Client() error {
 func Server() error {
 	for {
 		fileTunnel := NewFileTunnel()
+		fileTunnel.waitFileReady()
 		conn, err := net.Dial("tcp", ":"+*serverForward)
 		if err != nil {
 			log.Printf("listen failed %s", err)

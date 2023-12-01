@@ -12,14 +12,16 @@ import (
 )
 
 const MaxFileSize = 1024 * 1024 * 100
+const MaxWaitingTime = 10 * time.Second
 
 type FileTunnel struct {
-	Input  *os.File
-	Output *os.File
-	ready  bool
-	conn   net.Conn
-	writeL *sync.Mutex
-	readL  *sync.Mutex
+	Input             *os.File
+	Output            *os.File
+	ready             bool
+	conn              net.Conn
+	writeL            *sync.Mutex
+	readL             *sync.Mutex
+	lastFileWriteTime *time.Time
 }
 
 func (t *FileTunnel) Tunnel() {
@@ -59,7 +61,7 @@ func (t *FileTunnel) Close() {
 	if err := t.Output.Close(); err != nil {
 		log.Printf("FileTunnel %s close failed %s", t.Output.Name(), err)
 	}
-	if err := os.Truncate(t.Input.Name(), 0); err != nil {
+	if err := os.Truncate(*output, 0); err != nil {
 		log.Printf("FileTunnel %s truncate failed %s", t.Output.Name(), err)
 	}
 }
@@ -103,7 +105,6 @@ func (t *FileTunnel) emptyFile() {
 	if stat.Size() < MaxFileSize {
 		return
 	}
-
 	if err := t.Input.Close(); err != nil {
 		log.Printf("FileTunnel empty file close %s failed %s", t.Input.Name(), err)
 		panic(err)
@@ -130,12 +131,24 @@ func (t *FileTunnel) Read(p []byte) (int, error) {
 	defer t.readL.Unlock()
 	n, err := t.Input.Read(p)
 	if err != nil && strings.Contains(err.Error(), "EOF") {
+		if t.lastFileWriteTime != nil && time.Now().After(t.lastFileWriteTime.Add(MaxWaitingTime)) {
+			return n, errors.New("end waiting")
+		}
 		t.emptyFile()
+	} else {
+		tm := time.Now()
+		t.lastFileWriteTime = &tm
 	}
 	return n, err
 }
 
 func NewFileTunnel() *FileTunnel {
+	if err := os.Truncate(*output, 0); err != nil {
+		log.Printf("FileTunnel %s truncate failed %s", *output, err)
+	}
+	if err := os.Truncate(*input, 0); err != nil {
+		log.Printf("FileTunnel %s truncate failed %s", *input, err)
+	}
 	i, err := os.OpenFile(*input, os.O_RDONLY, 0644)
 	if err != nil {
 		log.Printf("FileTunnel open file %s as input failed %s", *input, err)
